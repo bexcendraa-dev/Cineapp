@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, ScrollView, TextInput, Linking, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, ScrollView, TextInput, Linking, Dimensions, Modal } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const API_KEY = '2a8c0216dfb393e18e9edff711dc1c48';
@@ -103,15 +104,24 @@ function MainApp() {
   const [movieDetails, setMovieDetails] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [page, setPage] = useState(1);
+  const [page, setPage] =
+useState(1);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [isSearchActive, setIsSearchActive] = useState(false); // El nuevo para la barra
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isSearchModalVisible, setIsSearchModalVisible] = 
+useState(false);
   const [yearFilter, setYearFilter] = useState('');
   const [ratingFilter, setRatingFilter] = useState('');
   const [genreFilter, setGenreFilter] = useState('');
   const [langFilter, setLangFilter] = useState('');
-  const [showAccountScreen, setShowAccountScreen] = useState(false);
+  const [tempYear, setTempYear] = useState('');
+  const [tempRating, setTempRating] = useState('');
+  const [tempGenre, setTempGenre] = useState(''); 
+  const [showAccountScreen, setShowAccountScreen] = 
+useState(false);
   const [accountData, setAccountData] = useState({ username: 'agustin1234', email: '', profileImage: null });
   const intervalRef = React.useRef(null);
 
@@ -139,7 +149,7 @@ const stopLongPress = () => {
     text: darkMode ? '#FFFFFF' : '#000000',
     subText: darkMode ? '#AAAAAA' : '#555555',
     border: darkMode ? '#333' : '#DDD'
-  };
+    };
 
   const sections = ['Películas', 'Recomendar', 'Logros', 'Perfil', 'Ajustes'];
 
@@ -178,6 +188,7 @@ const stopLongPress = () => {
     if (pageNum === 1) setLoading(true);
     else setLoadingMore(true);
     try {
+      setError(false); // <--- AGREGADO: Resetea el error al iniciar la búsqueda
       let url = `${BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES&sort_by=popularity.desc&page=${pageNum}`;
       if (searchQuery) {
         url = `${BASE_URL}/search/movie?api_key=${API_KEY}&language=es-ES&query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
@@ -194,7 +205,10 @@ const stopLongPress = () => {
       const data = await res.json();
       setSearchResults(prev => shouldReset ? data.results : [...prev, ...data.results]);
       setPage(pageNum);
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error(e); 
+      setError(true); // <--- AGREGADO: Activa el error para activar el Paso 3
+    }
     finally { setLoading(false); setLoadingMore(false); }
   };
 
@@ -202,7 +216,7 @@ const stopLongPress = () => {
     const timer = setTimeout(() => {
       if (searchQuery || yearFilter || ratingFilter || genreFilter || langFilter) fetchMovies(1, true);
       else setSearchResults([]);
-    }, 300);
+    }, 150);
     return () => clearTimeout(timer);
   }, [searchQuery, yearFilter, ratingFilter, genreFilter, langFilter]);
 
@@ -261,6 +275,26 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
         .then(col => setMovieCollection(col));
     }
   });
+  };
+
+  // 🔍 Función para resaltar lo que el usuario va escribiendo en el buscador
+  const renderHighlightedText = (text, query) => {
+    if (!query || !query.trim()) {
+      return <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>{text}</Text>;
+    }
+    const parts = text.split(new RegExp(`(${query})`, 'gi'));
+    
+    return (
+      <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>
+        {parts.map((part, index) => 
+          part.toLowerCase() === query.toLowerCase() ? (
+            <Text key={index} style={{ color: '#C9A84C' }}>{part}</Text>
+          ) : (
+            part
+          )
+        )}
+      </Text>
+    );
   };
 
   return (
@@ -493,7 +527,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
               <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Nota</Text>
             </View>
           </View>
-        </View>
+          </View>
  
         {/* BOTON TU HUELLA */}
         <TouchableOpacity
@@ -573,7 +607,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
       <View style={{ marginBottom: 20 }}>
         <Text style={{ color: '#888', fontSize: 11, fontWeight: '700', letterSpacing: 1.5, marginBottom: 12 }}>LA MÁS PARECIDA</Text>
         <TouchableOpacity onPress={() => openMovieDetail(similarMovies[0])} style={{ backgroundColor: '#1A1A1A', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)' }}>
-          <Image source={{ uri: `https://image.tmdb.org/t/p/w500${similarMovies[0].backdrop_path}` }} style={{ width: '100%', height: 150, opacity: 0.6 }} />
+        <Image source={{ uri: `https://image.tmdb.org/t/p/w500${similarMovies[0].backdrop_path}` }} style={{ width: '100%', height: 150, opacity: 0.6 }} />
           <View style={{ position: 'absolute', top: 12, left: 12, backgroundColor: '#C9A84C', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 }}>
             <Text style={{ color: '#080808', fontSize: 12, fontWeight: 'bold' }}>⭐ Más similar</Text>
           </View>
@@ -650,7 +684,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
       <View key={person.credit_id} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#1A1A1A', padding: 12, borderRadius: 12 }}>
         <Image source={{ uri: person.profile_path ? `https://image.tmdb.org/t/p/w200${person.profile_path}` : 'https://via.placeholder.com/50' }} style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: '#333' }} />
         <View style={{ marginLeft: 12, flex: 1 }}>
-          <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>{person.name}</Text>
+        <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>{person.name}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
             <View style={{ backgroundColor: 'rgba(201,168,76,0.15)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }}>
               <Text style={{ color: '#C9A84C', fontSize: 10 }}>{person.job === 'Director' ? '🎬 Director' : person.job === 'Producer' ? '🎥 Productor' : person.job === 'Screenplay' ? '✍️ Guión' : '🎵 Música'}</Text>
@@ -726,7 +760,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
   </View>
 )}
 <View style={{ flexDirection: 'row', marginBottom: 20, marginTop: trailerKey ? -50 : -30, zIndex: 10 }}>
-  <View style={{ flex: 1, justifyContent: 'space-around', paddingRight: 10, paddingTop: 20 }}>
+<View style={{ flex: 1, justifyContent: 'space-around', paddingRight: 10, paddingTop: 20 }}>
     <Text style={{ color: '#AAA', fontSize: 13 }}>Dir. {movieDetails?.credits?.crew?.find(c => c.job === 'Director')?.name || '...'}</Text>
     <Text style={{ color: '#AAA', fontSize: 13 }}>{movieDetails?.runtime} min</Text>
     <Text style={{ color: '#AAA', fontSize: 13 }}>{movieDetails?.production_countries?.[0]?.name || '...'}</Text>
@@ -807,7 +841,7 @@ borderColor: (() => {
             <Text style={{ color: '#ccc', fontSize: 11, marginTop: 6, textAlign: 'center' }} numberOfLines={1}>{part.title}</Text>
             <Text style={{ color: '#666', fontSize: 10, textAlign: 'center' }}>{part.release_date?.substring(0, 4)}</Text>
           </TouchableOpacity>
-        ))}
+          ))}
       </ScrollView>
     </View>
   )}
@@ -817,43 +851,136 @@ borderColor: (() => {
 )}
 </ScrollView>
 </View>
-          ) : (
-            <View style={{ flex: 1 }}>
-              <View style={styles.searchContainer}>
-  <TextInput
-    placeholder="Buscá una película…"
-    placeholderTextColor="#555"
-    style={styles.searchInput}
-    value={searchQuery}
-    onChangeText={setSearchQuery}
-  />
-  <View style={[styles.searchUnderline, searchQuery.length > 0 && styles.searchUnderlineActive]} />
-              </View>
-              
-              {loading ? (
-                <ActivityIndicator size="large" color="#E50914" style={{ marginTop: 20 }} />
-              ) : searchResults.length > 0 ? (
-                <FlatList
-                  key="list"
-                  data={searchResults}
-                  keyExtractor={(item, index) => item.id.toString() + index}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity onPress={() => openMovieDetail(item)} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#1A1A1A' }}>
-                      <Image source={{ uri: `https://image.tmdb.org/t/p/w200${item.poster_path}` }} style={{ width: 55, height: 80, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }} />
-                      <View style={{ marginLeft: 15, flex: 1 }}>
-                        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>{item.title}</Text>
-                        <Text style={{ color: '#888', fontSize: 13, marginTop: 4 }}>
-                          {item.release_date ? item.release_date.substring(0, 4) : ''}
-                          {item.release_date && '  •  '}
-                          <Text style={{ color: '#C9A84C', fontSize: 13 }}>{item.director || ''}</Text>
-                        </Text>
-                      </View>
-                      <Text style={{ color: '#E50914', fontSize: 20 }}>›</Text>
-                    </TouchableOpacity>
-                  )}
-                  onEndReached={() => fetchMovies(page + 1, false)}
-                />
               ) : (
+        <View style={{ flex: 1 }}>
+          
+          {/* 1. BARRA VISUAL NUEVA (Abre el modal al toque) */}
+          <TouchableOpacity onPress={() => setIsSearchModalVisible(true)} style={{ paddingHorizontal: 20, marginBottom: 15 }}>
+            <View style={[styles.searchContainer, { marginHorizontal: 0 }]}>
+              <TextInput
+                placeholder="Buscá una película…"
+                placeholderTextColor="#555"
+                style={styles.searchInput}
+                editable={false}       // 👈 No abre el teclado acá
+                pointerEvents="none"   // 👈 Traspasa el toque directo al botón
+              />
+              <View style={styles.searchUnderline} />
+            </View>
+          </TouchableOpacity>
+
+          {/* Modal dedicado para la Búsqueda */}
+<Modal
+  visible={isSearchModalVisible}
+  animationType="fade"
+  transparent={true}
+  onRequestClose={() => setIsSearchModalVisible(false)}
+>
+  {/* Cambiamos a SafeAreaView para que suba la barra y quede perfecta 🔝 */}
+  <SafeAreaView style={{ flex: 1, backgroundColor: '#111' }}>
+    
+    {/* Barra de búsqueda dentro del modal */}
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 20, marginBottom: 15, paddingTop: 10 }}>
+      
+      {/* Botón para volver atrás / cerrar modal */}
+<TouchableOpacity 
+  onPress={() => {
+    setIsSearchModalVisible(false); // Cierra el modal
+    setSearchQuery('');             // 🧹 Limpia el texto de la barra
+    if (typeof setSearchResults === 'function') setSearchResults([]); // 🧹 Vacía los resultados del modal
+  }} 
+  style={{ marginRight: 15, paddingBottom: 4 }}
+>
+  <Ionicons name="arrow-back" size={24} color="white" />
+</TouchableOpacity>
+
+      <View style={[styles.searchContainer, { flex: 1, marginBottom: 0, marginHorizontal: 0 }]}>
+        <TextInput
+          placeholder="Buscá una película…"
+          placeholderTextColor="#555"
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoFocus={true}
+        />
+        <View style={[styles.searchUnderline, searchQuery.length > 0 && styles.searchUnderlineActive]} />
+      </View>
+      
+      {/* 🎛️ Botón de Filtro */}
+      <TouchableOpacity 
+        onPress={() => setIsModalVisible(true)} 
+        style={{ marginLeft: 15, paddingBottom: 4 }}
+      >
+        <Ionicons name="options-outline" size={24} color="#aaa" />
+      </TouchableOpacity>
+    </View>
+
+        {/* 🍿 ACÁ APARECEN LOS RESULTADOS DE BÚSQUEDA ADENTRO DEL MODAL */}
+    {searchResults.length > 0 && (
+      <FlatList
+        key="list"
+        data={searchResults}
+        keyExtractor={(item, index) => item.id.toString() + index}
+        renderItem={({ item }) => (
+          <TouchableOpacity 
+            onPress={() => {
+              setIsSearchModalVisible(false); // Cierra el modal antes de ir al detalle
+              openMovieDetail(item);
+            }} 
+            style={{
+              flexDirection: 'row', 
+              alignItems: 'center', 
+              paddingHorizontal: 15, 
+              paddingVertical: 10, 
+              borderBottomWidth: 1, 
+              borderBottomColor: '#1A1A1A'
+            }}
+          >
+            {/* Póster de la película */}
+            <Image 
+              source={{ uri: `https://image.tmdb.org/t/p/w200${item.poster_path}` }} 
+              style={{ width: 55, height: 80, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }} 
+            />
+            
+            {/* 🆕 NUEVO: Contenedor de textos al costado del póster */}
+            <View style={{ marginLeft: 15, flex: 1 }}>
+              
+          {/* Título de la película con resaltado dinámico 🌟 */}
+{renderHighlightedText(item.title || item.name || '', searchQuery)}
+              
+              {/* Fila de info: Año + Estrellita de Valoración 🌟 */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                {item.release_date ? (
+                  <Text style={{ color: '#888', fontSize: 13, marginRight: 10 }}>
+                    {item.release_date.substring(0, 4)}
+                  </Text>
+                ) : null}
+                
+                {/* Ícono de estrella dorada usando Ionicons */}
+                <Ionicons name="star" size={14} color="#C9A84C" style={{ marginRight: 4 }} />
+                
+                {/* Puntuación (ej: 7.8) */}
+                <Text style={{ color: '#C9A84C', fontSize: 13, fontWeight: 'bold' }}>
+                  {item.vote_average ? item.vote_average.toFixed(1) : '0.0'}
+                </Text>
+              </View>
+
+            </View>
+
+            {/* El indicador "›" clásico que tenías antes en los resultados */}
+            <Text style={{ color: '#E50914', fontSize: 20, marginLeft: 10 }}>›</Text>
+
+          </TouchableOpacity>
+        )}
+      />
+    )}
+
+  </SafeAreaView>
+</Modal>
+
+          {/* Tu lógica de abajo sigue igual intacta */}
+{error ? (
+  <ActivityIndicator size="large" color="#E50914" style={{ marginTop: 20 }} />
+) : (
                 <FlatList
   data={movieCategories}
   keyExtractor={(item) => item.id.toString()}
@@ -885,7 +1012,7 @@ borderColor: (() => {
           )
         ) : activeSection === 'Juegos' ? (
           <ScrollView style={styles.containerJuegos} contentContainerStyle={{ padding: 20, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
-            <Text style={styles.tituloSeccion}>Zona de Juegos</Text>
+          <Text style={styles.tituloSeccion}>Zona de Juegos</Text>
             {listaDeJuegos.map((juego) => (
               <TouchableOpacity key={juego.id} style={styles.tarjetaJuego} onPress={() => alert('Próximamente: ' + juego.nombre)} activeOpacity={0.7}>
                 <Text style={styles.iconoJuego}>{juego.icono}</Text>
@@ -909,7 +1036,7 @@ borderColor: (() => {
           </ScrollView>
         ) : activeSection === 'Logros' ? (
           <ScrollView style={styles.containerLogros} contentContainerStyle={{ padding: 20, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
-            <Text style={styles.tituloSeccion}>Logros & Trofeos</Text>
+           <Text style={styles.tituloSeccion}>Logros & Trofeos</Text>
             {logrosOpciones.map((logro) => (
               <TouchableOpacity key={logro.id} style={styles.tarjetaLogro} onPress={() => alert(`Logro: ${logro.nombre}\n\n${logro.descripcion}`)} activeOpacity={0.8}>
                 <Text style={styles.iconoLogro}>{logro.icono}</Text>
@@ -1047,7 +1174,7 @@ borderColor: (() => {
                   <View>
                     <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>Favoritas</Text>
                     <Text style={{ color: '#888', fontSize: 13 }}>{peliculasFavoritas.length} películas</Text>
-                  </View>
+                    </View>
                 </View>
                 <Text style={{ color: '#E50914', fontSize: 20 }}>›</Text>
               </TouchableOpacity>
