@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, ScrollView, TextInput, Linking, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ActivityIndicator, ScrollView, TextInput, Linking, Dimensions, Modal } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const API_KEY = '2a8c0216dfb393e18e9edff711dc1c48';
@@ -103,15 +104,32 @@ function MainApp() {
   const [movieDetails, setMovieDetails] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [page, setPage] = useState(1);
+  const [page, setPage] =
+useState(1);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [isSearchActive, setIsSearchActive] = useState(false); // El nuevo para la barra
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isSearchModalVisible, setIsSearchModalVisible] = 
+useState(false);
   const [yearFilter, setYearFilter] = useState('');
   const [ratingFilter, setRatingFilter] = useState('');
   const [genreFilter, setGenreFilter] = useState('');
   const [langFilter, setLangFilter] = useState('');
-  const [showAccountScreen, setShowAccountScreen] = useState(false);
+  const [tempYear, setTempYear] = useState('');
+  const [tempRating, setTempRating] = useState('');
+  const [tempGenre, setTempGenre] = useState(''); 
+  const [tempGenreFilter, setTempGenreFilter] = useState('');
+  const [tempRatingFilter, setTempRatingFilter] = 
+useState('');
+  const [tempYearFilter, setTempYearFilter] = useState('');
+  const [tempLangFilter, setTempLangFilter] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [isFilterModalVisible, setIsFilterModalVisible] = useState(false);  
+  const [openSection, setOpenSection] = useState(null); 
+  const [showAccountScreen, setShowAccountScreen] = 
+useState(false);
   const [accountData, setAccountData] = useState({ username: 'agustin1234', email: '', profileImage: null });
   const intervalRef = React.useRef(null);
 
@@ -139,14 +157,33 @@ const stopLongPress = () => {
     text: darkMode ? '#FFFFFF' : '#000000',
     subText: darkMode ? '#AAAAAA' : '#555555',
     border: darkMode ? '#333' : '#DDD'
-  };
+    };
 
   const sections = ['Películas', 'Recomendar', 'Logros', 'Perfil', 'Ajustes'];
 
-  useEffect(() => {
+      useEffect(() => {
     fetch(`${BASE_URL}/genre/movie/list?api_key=${API_KEY}&language=es-ES`)
       .then(res => res.json())
-      .then(data => setCategories(data.genres || []))
+      .then(data => {
+        const generosDeInternet = data.genres || [];
+        
+        // 1. Quitamos "Película de TV" (su ID en TMDB es 10770)
+        const filtrados = generosDeInternet.filter(g => g.id !== 10770);
+        
+        // 2. Mapeamos para agregar la propiedad 'type' y cambiamos el nombre de "Música" a "Musical"
+        const mapeados = filtrados.map(g => {
+          if (g.id === 10402) return { ...g, name: 'Musical', type: 'genre' };
+          return { ...g, type: 'genre' };
+        });
+        
+        // 3. Inyectamos "Biografía" manualmente asignándole el tipo 'keyword'
+        mapeados.push({ id: '5565', name: 'Biografía', type: 'keyword' });
+
+        // 🟢 4. NUEVO: Inyectamos "Anime" también como palabra clave (Keyword ID: 210024)
+        mapeados.push({ id: '210024', name: 'Anime', type: 'keyword' });
+        
+        setCategories(mapeados);
+      })
       .catch(err => console.error(err));
   }, []);
 
@@ -158,12 +195,19 @@ const stopLongPress = () => {
         const oscars = await fetch(`${BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES&with_awards=true&sort_by=vote_average.desc&vote_count.gte=1000`).then(r => r.json());
         const especiales = [
           { id: 'trending', name: 'Tendencia', movies: trending.results },
-{ id: 'top_rated', name: 'Mejor valoradas', movies: topRated.results },
-{ id: 'oscars', name: 'Oscar', movies: oscars.results },
+          { id: 'top_rated', name: 'Mejor valoradas', movies: topRated.results },
+          { id: 'oscars', name: 'Oscar', movies: oscars.results },
         ];
         const normales = await Promise.all(
           categories.map(async (cat) => {
-            const res = await fetch(`${BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES&with_genres=${cat.id}`);
+            // Evaluamos si la categoría del carrusel es un género o una palabra clave (Biografía)
+            let queryUrl = `${BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES`;
+            if (cat.type === 'keyword') {
+              queryUrl += `&with_keywords=${cat.id}`;
+            } else {
+              queryUrl += `&with_genres=${cat.id}`;
+            }
+            const res = await fetch(queryUrl);
             const data = await res.json();
             return { id: cat.id, name: cat.name, movies: data.results };
           })
@@ -174,35 +218,111 @@ const stopLongPress = () => {
     }
   }, [categories]);
 
-  const fetchMovies = async (pageNum = 1, shouldReset = false) => {
+      const handleGenrePress = (id) => {
+    // Parseamos el estado actual o empezamos con un objeto vacío
+    let current = tempGenreFilter ? JSON.parse(tempGenreFilter) : {};
+    
+    const currentStatus = current[id]; // Puede ser undefined, 'include' o 'exclude'
+    
+    // Contamos cuántos géneros ya están activos (tanto incluidos como excluidos)
+    const totalActivos = Object.values(current).filter(status => status === 'include' || status === 'exclude').length;
+    
+    if (!currentStatus) {
+      // 1er toque: De Normal pasa a -> Incluir (Dorado)
+      const MAX_LIMIT = 5; // Podés cambiar este número al máximo que quieras
+      if (totalActivos >= MAX_LIMIT) {
+        alert(`¡Límite alcanzado! Solo podés seleccionar o excluir hasta ${MAX_LIMIT} géneros en simultáneo.`);
+        return;
+      }
+      current[id] = 'include';
+    } else if (currentStatus === 'include') {
+      // 2do toque: De Incluir pasa a -> Excluir (Rojo)
+      current[id] = 'exclude';
+    } else {
+      // 3er toque: De Excluir pasa a -> Normal (Se borra del filtro)
+      delete current[id];
+    }
+    
+    // Si el objeto se quedó vacío, seteamos string vacío para limpiar, si no lo guardamos como JSON
+    if (Object.keys(current).length === 0) {
+      setTempGenreFilter('');
+    } else {
+      setTempGenreFilter(JSON.stringify(current));
+    }
+  };
+
+      const fetchMovies = async (pageNum = 1, shouldReset = false) => {
     if (pageNum === 1) setLoading(true);
     else setLoadingMore(true);
     try {
+      setError(false); // Resetea el error al iniciar la búsqueda
       let url = `${BASE_URL}/discover/movie?api_key=${API_KEY}&language=es-ES&sort_by=popularity.desc&page=${pageNum}`;
+      
       if (searchQuery) {
         url = `${BASE_URL}/search/movie?api_key=${API_KEY}&language=es-ES&query=${encodeURIComponent(searchQuery)}&page=${pageNum}`;
       } else {
         if (yearFilter) url += `&primary_release_year=${yearFilter}`;
         if (ratingFilter) url += `&vote_average.gte=${ratingFilter}`;
         if (langFilter) url += `&with_original_language=${langFilter.toLowerCase()}`;
+        
         if (genreFilter) {
-          const g = categories.find(c => c.name.toLowerCase().includes(genreFilter.toLowerCase()));
-          if (g) url += `&with_genres=${g.id}`;
+          try {
+            // Procesamos el mapa de múltiples géneros elegidos
+            const selectionMap = JSON.parse(genreFilter);
+            const incGenres = [];
+            const excGenres = [];
+            const incKeywords = [];
+            const excKeywords = [];
+
+            Object.entries(selectionMap).forEach(([id, status]) => {
+              const cat = categories.find(c => c.id.toString() === id.toString());
+              if (cat) {
+                if (cat.type === 'keyword') {
+                  if (status === 'include') incKeywords.push(id);
+                  else if (status === 'exclude') excKeywords.push(id);
+                } else {
+                  if (status === 'include') incGenres.push(id);
+                  else if (status === 'exclude') excGenres.push(id);
+                }
+              }
+            });
+
+            // Agregamos los parámetros limpios a la URL de TMDB
+            if (incGenres.length > 0) url += `&with_genres=${incGenres.join('|')}`;
+            if (excGenres.length > 0) url += `&without_genres=${excGenres.join(',')}`;
+            if (incKeywords.length > 0) url += `&with_keywords=${incKeywords.join('|')}`;
+            if (excKeywords.length > 0) url += `&without_keywords=${excKeywords.join(',')}`;
+
+          } catch (e) {
+            // Respaldo por si quedara algún texto plano viejo flotando
+            const g = categories.find(c => c.name.toLowerCase().includes(genreFilter.toLowerCase()));
+            if (g) {
+              if (g.type === 'keyword') url += `&with_keywords=${g.id}`;
+              else url += `&with_genres=${g.id}`;
+            }
+          }
         }
       }
+
       const res = await fetch(url);
       const data = await res.json();
       setSearchResults(prev => shouldReset ? data.results : [...prev, ...data.results]);
       setPage(pageNum);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); setLoadingMore(false); }
+    } catch (e) { 
+      console.error(e); 
+      setError(true); 
+    }
+    finally { 
+      setLoading(false); 
+      setLoadingMore(false); 
+    }
   };
 
   useEffect(() => {
     const timer = setTimeout(() => {
       if (searchQuery || yearFilter || ratingFilter || genreFilter || langFilter) fetchMovies(1, true);
       else setSearchResults([]);
-    }, 300);
+    }, 150);
     return () => clearTimeout(timer);
   }, [searchQuery, yearFilter, ratingFilter, genreFilter, langFilter]);
 
@@ -261,6 +381,26 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
         .then(col => setMovieCollection(col));
     }
   });
+  };
+
+  // 🔍 Función para resaltar lo que el usuario va escribiendo en el buscador
+  const renderHighlightedText = (text, query) => {
+    if (!query || !query.trim()) {
+      return <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>{text}</Text>;
+    }
+    const parts = text.split(new RegExp(`(${query})`, 'gi'));
+    
+    return (
+      <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>
+        {parts.map((part, index) => 
+          part.toLowerCase() === query.toLowerCase() ? (
+            <Text key={index} style={{ color: '#C9A84C' }}>{part}</Text>
+          ) : (
+            part
+          )
+        )}
+      </Text>
+    );
   };
 
   return (
@@ -493,7 +633,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
               <Text style={{ color: '#888', fontSize: 12, marginTop: 4 }}>Nota</Text>
             </View>
           </View>
-        </View>
+          </View>
  
         {/* BOTON TU HUELLA */}
         <TouchableOpacity
@@ -573,7 +713,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
       <View style={{ marginBottom: 20 }}>
         <Text style={{ color: '#888', fontSize: 11, fontWeight: '700', letterSpacing: 1.5, marginBottom: 12 }}>LA MÁS PARECIDA</Text>
         <TouchableOpacity onPress={() => openMovieDetail(similarMovies[0])} style={{ backgroundColor: '#1A1A1A', borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(201,168,76,0.3)' }}>
-          <Image source={{ uri: `https://image.tmdb.org/t/p/w500${similarMovies[0].backdrop_path}` }} style={{ width: '100%', height: 150, opacity: 0.6 }} />
+        <Image source={{ uri: `https://image.tmdb.org/t/p/w500${similarMovies[0].backdrop_path}` }} style={{ width: '100%', height: 150, opacity: 0.6 }} />
           <View style={{ position: 'absolute', top: 12, left: 12, backgroundColor: '#C9A84C', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 }}>
             <Text style={{ color: '#080808', fontSize: 12, fontWeight: 'bold' }}>⭐ Más similar</Text>
           </View>
@@ -650,7 +790,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
       <View key={person.credit_id} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#1A1A1A', padding: 12, borderRadius: 12 }}>
         <Image source={{ uri: person.profile_path ? `https://image.tmdb.org/t/p/w200${person.profile_path}` : 'https://via.placeholder.com/50' }} style={{ width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: '#333' }} />
         <View style={{ marginLeft: 12, flex: 1 }}>
-          <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>{person.name}</Text>
+        <Text style={{ color: 'white', fontSize: 15, fontWeight: '600' }}>{person.name}</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
             <View style={{ backgroundColor: 'rgba(201,168,76,0.15)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }}>
               <Text style={{ color: '#C9A84C', fontSize: 10 }}>{person.job === 'Director' ? '🎬 Director' : person.job === 'Producer' ? '🎥 Productor' : person.job === 'Screenplay' ? '✍️ Guión' : '🎵 Música'}</Text>
@@ -726,7 +866,7 @@ fetch(`${BASE_URL}/movie/${movie.id}?api_key=${API_KEY}&language=es-ES`)
   </View>
 )}
 <View style={{ flexDirection: 'row', marginBottom: 20, marginTop: trailerKey ? -50 : -30, zIndex: 10 }}>
-  <View style={{ flex: 1, justifyContent: 'space-around', paddingRight: 10, paddingTop: 20 }}>
+<View style={{ flex: 1, justifyContent: 'space-around', paddingRight: 10, paddingTop: 20 }}>
     <Text style={{ color: '#AAA', fontSize: 13 }}>Dir. {movieDetails?.credits?.crew?.find(c => c.job === 'Director')?.name || '...'}</Text>
     <Text style={{ color: '#AAA', fontSize: 13 }}>{movieDetails?.runtime} min</Text>
     <Text style={{ color: '#AAA', fontSize: 13 }}>{movieDetails?.production_countries?.[0]?.name || '...'}</Text>
@@ -807,7 +947,7 @@ borderColor: (() => {
             <Text style={{ color: '#ccc', fontSize: 11, marginTop: 6, textAlign: 'center' }} numberOfLines={1}>{part.title}</Text>
             <Text style={{ color: '#666', fontSize: 10, textAlign: 'center' }}>{part.release_date?.substring(0, 4)}</Text>
           </TouchableOpacity>
-        ))}
+          ))}
       </ScrollView>
     </View>
   )}
@@ -817,43 +957,445 @@ borderColor: (() => {
 )}
 </ScrollView>
 </View>
-          ) : (
-            <View style={{ flex: 1 }}>
-              <View style={styles.searchContainer}>
-  <TextInput
-    placeholder="Buscá una película…"
-    placeholderTextColor="#555"
-    style={styles.searchInput}
-    value={searchQuery}
-    onChangeText={setSearchQuery}
-  />
-  <View style={[styles.searchUnderline, searchQuery.length > 0 && styles.searchUnderlineActive]} />
-              </View>
-              
-              {loading ? (
-                <ActivityIndicator size="large" color="#E50914" style={{ marginTop: 20 }} />
-              ) : searchResults.length > 0 ? (
-                <FlatList
-                  key="list"
-                  data={searchResults}
-                  keyExtractor={(item, index) => item.id.toString() + index}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity onPress={() => openMovieDetail(item)} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#1A1A1A' }}>
-                      <Image source={{ uri: `https://image.tmdb.org/t/p/w200${item.poster_path}` }} style={{ width: 55, height: 80, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }} />
-                      <View style={{ marginLeft: 15, flex: 1 }}>
-                        <Text style={{ color: 'white', fontSize: 16, fontWeight: 'bold' }} numberOfLines={1}>{item.title}</Text>
-                        <Text style={{ color: '#888', fontSize: 13, marginTop: 4 }}>
-                          {item.release_date ? item.release_date.substring(0, 4) : ''}
-                          {item.release_date && '  •  '}
-                          <Text style={{ color: '#C9A84C', fontSize: 13 }}>{item.director || ''}</Text>
-                        </Text>
-                      </View>
-                      <Text style={{ color: '#E50914', fontSize: 20 }}>›</Text>
-                    </TouchableOpacity>
-                  )}
-                  onEndReached={() => fetchMovies(page + 1, false)}
-                />
               ) : (
+        <View style={{ flex: 1 }}>
+          
+          {/* 1. BARRA VISUAL NUEVA (Abre el modal al toque) */}
+          <TouchableOpacity onPress={() => setIsSearchModalVisible(true)} style={{ paddingHorizontal: 20, marginBottom: 15 }}>
+            <View style={[styles.searchContainer, { marginHorizontal: 0 }]}>
+              <TextInput
+                placeholder="Buscá una película…"
+                placeholderTextColor="#555"
+                style={styles.searchInput}
+                editable={false}       // 👈 No abre el teclado acá
+                pointerEvents="none"   // 👈 Traspasa el toque directo al botón
+              />
+              <View style={styles.searchUnderline} />
+            </View>
+          </TouchableOpacity>
+
+          {/* Modal dedicado para la Búsqueda */}
+<Modal
+  visible={isSearchModalVisible}
+  animationType="fade"
+  transparent={false}
+  onRequestClose={() => setIsSearchModalVisible(false)}
+>
+<View style={{ flex: 1, backgroundColor: '#111' }}>
+  {/* Cambiamos a SafeAreaView para que suba la barra y quede perfecta 🔝 */}
+  <SafeAreaView style={{ flex: 1, backgroundColor: '#111' }}>
+    
+    {/* Barra de búsqueda dentro del modal */}
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 20, marginBottom: 15, paddingTop: 10 }}>
+      
+      {/* Botón para volver atrás / cerrar modal */}
+<TouchableOpacity 
+  onPress={() => {
+    setIsSearchModalVisible(false); // Cierra el modal
+    setSearchQuery('');             // 🧹 Limpia el texto de la barra
+    if (typeof setSearchResults === 'function') setSearchResults([]); // 🧹 Vacía los resultados del modal
+  }} 
+  style={{ marginRight: 15, paddingBottom: 4 }}
+>
+  <Ionicons name="arrow-back" size={24} color="white" />
+</TouchableOpacity>
+
+      <View style={[styles.searchContainer, { flex: 1, marginBottom: 0, marginHorizontal: 0 }]}>
+        <TextInput
+          placeholder="Buscá una película…"
+          placeholderTextColor="#555"
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          autoFocus={true}
+        />
+        <View style={[styles.searchUnderline, searchQuery.length > 0 && styles.searchUnderlineActive]} />
+      </View>
+      
+      {/* 🎛️ Botón de Filtro Modificado */}
+<TouchableOpacity
+  onPress={() => {
+    // Copiamos los filtros reales a los temporales antes de abrir
+    setTempGenreFilter(genreFilter);
+    setTempRatingFilter(ratingFilter);
+    setTempYearFilter(yearFilter);
+    setTempLangFilter(langFilter);
+    
+    // Ahora sí, abrimos el modal
+    setIsFilterModalVisible(true);
+  }}
+  style={{ marginLeft: 15, paddingBottom: 4 }}
+>
+  <Ionicons 
+    name={showFilters ? "options" : "options-outline"} 
+    size={24} 
+    color={showFilters ? "#C9A84C" : "#aaa"} 
+  />
+</TouchableOpacity>
+</View>
+
+{/* 🚨 NUEVO MODAL EXCLUSIVO DE FILTROS A PANTALLA COMPLETA */}
+<Modal
+  visible={isFilterModalVisible}
+  animationType="slide"
+  onRequestClose={() => setIsFilterModalVisible(false)}
+>
+  <SafeAreaView style={{ flex: 1, backgroundColor: '#0A0A0A', paddingHorizontal: 15, paddingTop: 10 }}>
+    
+    {/* 🌟 ENCABEZADO DEL MODAL */}
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingVertical: 10 }}>
+      <TouchableOpacity onPress={() => setIsFilterModalVisible(false)}>
+        <Ionicons name="close" size={26} color="white" />
+      </TouchableOpacity>
+      <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>Filtros de Búsqueda</Text>
+      <TouchableOpacity onPress={() => { setGenreFilter(''); setRatingFilter(''); setYearFilter(''); setLangFilter(''); }}>
+        <Text style={{ color: '#E50914', fontSize: 14, fontWeight: 'bold' }}>Limpiar</Text>
+      </TouchableOpacity>
+    </View>
+
+    {/* 📜 CONTENEDOR CON SCROLL PARA LOS ACORDEONES */}
+    <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+      
+          {/* 1. SECCIÓN GÉNERO */}
+    <View style={{ borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 4 }}>
+      <TouchableOpacity
+        onPress={() => setOpenSection(openSection === 'genero' ? null : 'genero')}
+        style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 18, paddingHorizontal: 4, backgroundColor: 'transparent' }}
+      >
+        <Text style={{ color: tempGenreFilter ? '#C9A84C' : 'white', fontWeight: 'bold' }}>
+          {(() => {
+            if (!tempGenreFilter) return 'Seleccionar Género';
+            try {
+              const currentGenres = JSON.parse(tempGenreFilter);
+              const names = [];
+              Object.entries(currentGenres).forEach(([id, status]) => {
+                const cat = categories.find(c => c.id.toString() === id.toString());
+                if (cat) {
+                  names.push(status === 'exclude' ? `✕ ${cat.name}` : cat.name);
+                }
+              });
+              return names.length > 0 ? `Género: ${names.join(', ')}` : 'Seleccionar Género';
+            } catch (e) {
+              return 'Seleccionar Género';
+            }
+          })()}
+        </Text>
+        <Ionicons name={openSection === 'genero' ? "chevron-up" : "chevron-down"} size={18} color="#C9A84C" />
+      </TouchableOpacity>
+
+      {openSection === 'genero' && (
+        <View style={{ backgroundColor: 'transparent', paddingVertical: 12, paddingHorizontal: 4, flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+          {categories.map((cat) => {
+            // Leemos el estado de este chip específico
+            const currentGenres = tempGenreFilter ? JSON.parse(tempGenreFilter) : {};
+            const status = currentGenres[cat.id]; // 'include', 'exclude' o undefined
+
+            // Colores por defecto (Estado: Normal)
+            let backgroundColor = 'transparent';
+            let borderColor = '#444';
+            let textColor = '#AAA';
+
+            // Ajustamos colores según el estado de la multi-selección
+            if (status === 'include') {
+              backgroundColor = '#C9A84C'; // Dorado
+              borderColor = '#C9A84C';
+              textColor = 'black';
+            } else if (status === 'exclude') {
+              backgroundColor = '#D93838'; // Rojo
+              borderColor = '#D93838';
+              textColor = 'white';
+            }
+
+            return (
+              <TouchableOpacity
+                key={cat.id}
+                onPress={() => handleGenrePress(cat.id)}
+                style={{
+                  backgroundColor: backgroundColor,
+                  borderWidth: 1,
+                  borderColor: borderColor,
+                  paddingVertical: 8,
+                  paddingHorizontal: 14,
+                  borderRadius: 20,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+              >
+                <Text style={{ color: textColor, fontSize: 13, fontWeight: '500' }}>
+                  {status === 'exclude' ? `✕ ${cat.name}` : cat.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+    </View>    
+      
+{/* 2. SECCIÓN NOTA MÍNIMA */}
+<View style={{ borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 4 }}>
+  <TouchableOpacity 
+    onPress={() => setOpenSection(openSection === 'nota' ? null : 'nota')}
+    style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 18, paddingHorizontal: 4, backgroundColor: 'transparent' }}
+  >
+    <Text style={{ color: tempRatingFilter ? '#C9A84C' : 'white', fontWeight: 'bold' }}>
+  {tempRatingFilter ? `Nota Mínima: ★ ${tempRatingFilter}` : 'Seleccionar Nota Mínima'}
+</Text>
+    <Ionicons name={openSection === 'nota' ? "chevron-up" : "chevron-down"} size={18} color="#C9A84C" />
+  </TouchableOpacity>
+
+  {openSection === 'nota' && (
+    <View style={{ backgroundColor: 'transparent', paddingVertical: 12, paddingHorizontal: 4, flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'space-between', marginBottom: 12 }}>
+      {['1.0', '2.0', '3.0', '4.0', '5.0', '6.0', '7.0', '8.0', '9.0'].map((rate) => {
+  // 1️⃣ LÍNEA CAMBIADA: Ahora compara contra la puntuación temporal
+  const isSelected = tempRatingFilter === rate;
+
+  return (
+    <TouchableOpacity
+      key={rate}
+      onPress={() => 
+        // 2️⃣ LÍNEA CAMBIADA: Ahora guarda en la puntuación temporal
+        setTempRatingFilter(isSelected ? '' : rate)
+      }
+      style={{
+        backgroundColor: isSelected ? '#C9A84C' : 'transparent',
+        borderWidth: isSelected ? 0 : 1,
+        borderColor: isSelected ? '#C9A84C' : '#444',
+        paddingVertical: 10,
+        borderRadius: 20,
+        width: '30%',
+        alignItems: 'center'
+      }}
+    >
+      <Text style={{ color: isSelected ? 'black' : '#AAA', fontSize: 14, fontWeight: 'bold' }}>
+        +{Math.floor(rate)}
+      </Text>
+    </TouchableOpacity>
+  );
+})}
+    </View>
+  )}
+</View>
+
+{/* 3. SECCIÓN AÑO */}
+<View style={{ borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 4 }}>
+  
+  {/* 🏷️ ENCABEZADO DE LA SECCIÓN (Se pone dorado en tiempo real) */}
+  <TouchableOpacity
+    onPress={() => setOpenSection(openSection === 'anio' ? '' : 'anio')}
+    style={{
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 16
+    }}
+  >
+    <Text style={{ color: tempYearFilter ? '#C9A84C' : 'white', fontWeight: 'bold' }}>
+      {tempYearFilter ? `Año: ${tempYearFilter}` : 'Seleccionar Año'}
+    </Text>
+    <Ionicons 
+      name={openSection === 'anio' ? "chevron-up" : "chevron-down"} 
+      size={20} 
+      color={tempYearFilter ? '#C9A84C' : '#AAA'} 
+    />
+  </TouchableOpacity>
+
+  {/* 📦 CONTENIDO DESPLEGABLE */}
+  {openSection === 'anio' && (
+    <View style={{ backgroundColor: 'transparent', paddingVertical: 12, paddingHorizontal: 4 }}>
+      
+      {/* 1️⃣ Chips Rápidos actuales */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+        {['2026', '2025', '2024', '2023', '2021', '2020', '2015', '2010', '2000', '1999'].map((yr) => {
+          const isSelected = tempYearFilter === yr;
+          return (
+            <TouchableOpacity
+              key={yr}
+              onPress={() => setTempYearFilter(isSelected ? '' : yr)}
+              style={{
+                backgroundColor: isSelected ? '#C9A84C' : 'transparent',
+                borderWidth: isSelected ? 0 : 1,
+                borderColor: isSelected ? '#C9A84C' : '#444',
+                paddingVertical: 8,
+                paddingHorizontal: 14,
+                borderRadius: 20
+              }}
+            >
+              <Text style={{ color: isSelected ? 'black' : '#AAA', fontSize: 13, fontWeight: '500' }}>
+                {yr}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ✍️ 2️⃣ Entrada para escribir cualquier año personalizado */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+        <Text style={{ color: '#AAA', fontSize: 14, fontWeight: '500' }}>O escribe el año:</Text>
+        <TextInput
+          placeholder="Ej: 1994"
+          placeholderTextColor="#555"
+          keyboardType="numeric"
+          maxLength={4}
+          value={tempYearFilter}
+          onChangeText={(text) => {
+            // Deja solo números enteros
+            const numeroLimpio = text.replace(/[^0-9]/g, '');
+            setTempYearFilter(numeroLimpio);
+          }}
+          style={{
+            flex: 1,
+            backgroundColor: '#111',
+            borderWidth: 1,
+            borderColor: tempYearFilter && !['2026', '2025', '2024', '2023', '2021', '2020', '2015', '2010', '2000', '1999'].includes(tempYearFilter) ? '#C9A84C' : '#444',
+            borderRadius: 8,
+            paddingVertical: 8,
+            paddingHorizontal: 12,
+            color: 'white',
+            fontSize: 14,
+            textAlign: 'center'
+          }}
+        />
+      </View>
+
+    </View>
+  )}
+</View>
+
+{/* 4. SECCIÓN IDIOMA */}
+<View style={{ borderBottomWidth: 1, borderBottomColor: '#222', marginBottom: 4 }}>      
+  <TouchableOpacity 
+    onPress={() => setOpenSection(openSection === 'idioma' ? null : 'idioma')}
+    style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 18, paddingHorizontal: 4, backgroundColor: 'transparent' }}          
+  >
+    <Text style={{ color: tempLangFilter ? '#C9A84C' : 'white', fontWeight: 'bold' }}>
+  {tempLangFilter ? `Idioma: ${tempLangFilter.toUpperCase()}` : 'Seleccionar Idioma'}
+</Text>
+    <Ionicons name={openSection === 'idioma' ? "chevron-up" : "chevron-down"} size={18} color="#C9A84C" />
+  </TouchableOpacity>
+  
+  {openSection === 'idioma' && (
+    <View style={{ backgroundColor: 'transparent', paddingVertical: 12, paddingHorizontal: 4, flexDirection: 'row', gap: 10, marginBottom: 12 }}>
+      {[{ label: 'Español', code: 'es' }, { label: 'Inglés', code: 'en' }, { label: 'Japonés', code: 'ja' }, { label: 'Coreano', code: 'ko' }].map((lang) => {
+  const isSelected = tempLangFilter === lang.code;
+
+  return (
+    <TouchableOpacity
+      key={lang.code}
+      onPress={() => 
+        // 2️⃣ LÍNEA CAMBIADA: Ahora guarda en el idioma temporal
+        setTempLangFilter(isSelected ? '' : lang.code)
+      }
+      style={{
+        backgroundColor: isSelected ? '#C9A84C' : 'transparent',
+        borderWidth: isSelected ? 0 : 1,
+        borderColor: isSelected ? '#C9A84C' : '#444',
+        paddingVertical: 10,
+        borderRadius: 20,
+        flex: 1,
+        alignItems: 'center'
+      }}
+    >
+      <Text style={{ color: isSelected ? 'black' : '#AAA', fontSize: 13, fontWeight: 'bold' }}>
+        {lang.label}
+      </Text>
+    </TouchableOpacity>
+  );
+})}
+    </View>
+  )}
+</View>
+
+</ScrollView>
+
+    {/* 🚀 BOTÓN PARA APLICAR Y VOLVER */}
+<TouchableOpacity
+  onPress={() => {
+    // 1. Convertimos los temporales en los filtros reales de la app
+    setGenreFilter(tempGenreFilter);
+    setRatingFilter(tempRatingFilter);
+    setYearFilter(tempYearFilter);
+    setLangFilter(tempLangFilter);
+
+    // 2. Cerramos el modal
+    setIsFilterModalVisible(false);
+  }}
+  style={{ backgroundColor: '#C9A84C', padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 20, marginTop: 10 }}
+>
+  <Text style={{ color: 'black', fontWeight: 'bold', fontSize: 16 }}>Aplicar Filtros</Text>
+</TouchableOpacity>
+  </SafeAreaView>
+</Modal>
+
+        {/* 🍿 ACÁ APARECEN LOS RESULTADOS DE BÚSQUEDA ADENTRO DEL MODAL */}
+    {searchResults.length > 0 && (
+      <FlatList
+        key="list"
+        data={searchResults}
+        keyExtractor={(item, index) => item.id.toString() + index}
+        renderItem={({ item }) => (
+          <TouchableOpacity 
+            onPress={() => {
+              setIsSearchModalVisible(false); // Cierra el modal antes de ir al detalle
+              openMovieDetail(item);
+            }} 
+            style={{
+              flexDirection: 'row', 
+              alignItems: 'center', 
+              paddingHorizontal: 15, 
+              paddingVertical: 10, 
+              borderBottomWidth: 1, 
+              borderBottomColor: '#1A1A1A'
+            }}
+          >
+            {/* Póster de la película */}
+            <Image 
+              source={{ uri: `https://image.tmdb.org/t/p/w200${item.poster_path}` }} 
+              style={{ width: 55, height: 80, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(201,168,76,0.4)' }} 
+            />
+            
+            {/* 🆕 NUEVO: Contenedor de textos al costado del póster */}
+            <View style={{ marginLeft: 15, flex: 1 }}>
+              
+          {/* Título de la película con resaltado dinámico 🌟 */}
+{renderHighlightedText(item.title || item.name || '', searchQuery)}
+              
+              {/* Fila de info: Año + Estrellita de Valoración 🌟 */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                {item.release_date ? (
+                  <Text style={{ color: '#888', fontSize: 13, marginRight: 10 }}>
+                    {item.release_date.substring(0, 4)}
+                  </Text>
+                ) : null}
+                
+                {/* Ícono de estrella dorada usando Ionicons */}
+                <Ionicons name="star" size={14} color="#C9A84C" style={{ marginRight: 4 }} />
+                
+                {/* Puntuación (ej: 7.8) */}
+                <Text style={{ color: '#C9A84C', fontSize: 13, fontWeight: 'bold' }}>
+                  {item.vote_average ? item.vote_average.toFixed(1) : '0.0'}
+                </Text>
+              </View>
+
+            </View>
+
+            {/* El indicador "›" clásico que tenías antes en los resultados */}
+            <Text style={{ color: '#E50914', fontSize: 20, marginLeft: 10 }}>›</Text>
+
+          </TouchableOpacity>
+        )}
+      />
+    )}
+
+  </SafeAreaView>
+ </View> 
+</Modal>
+
+
+          {/* Tu lógica de abajo sigue igual intacta */}
+{error ? (
+  <ActivityIndicator size="large" color="#E50914" style={{ marginTop: 20 }} />
+) : (
                 <FlatList
   data={movieCategories}
   keyExtractor={(item) => item.id.toString()}
@@ -885,7 +1427,7 @@ borderColor: (() => {
           )
         ) : activeSection === 'Juegos' ? (
           <ScrollView style={styles.containerJuegos} contentContainerStyle={{ padding: 20, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
-            <Text style={styles.tituloSeccion}>Zona de Juegos</Text>
+          <Text style={styles.tituloSeccion}>Zona de Juegos</Text>
             {listaDeJuegos.map((juego) => (
               <TouchableOpacity key={juego.id} style={styles.tarjetaJuego} onPress={() => alert('Próximamente: ' + juego.nombre)} activeOpacity={0.7}>
                 <Text style={styles.iconoJuego}>{juego.icono}</Text>
@@ -1047,7 +1589,7 @@ borderColor: (() => {
                   <View>
                     <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>Favoritas</Text>
                     <Text style={{ color: '#888', fontSize: 13 }}>{peliculasFavoritas.length} películas</Text>
-                  </View>
+                    </View>
                 </View>
                 <Text style={{ color: '#E50914', fontSize: 20 }}>›</Text>
               </TouchableOpacity>
